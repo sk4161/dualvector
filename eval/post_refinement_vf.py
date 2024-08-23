@@ -1,63 +1,62 @@
 import argparse
+import itertools
 import os
 import sys
+from typing import Optional
 
-sys.path.append(os.getcwd())
-import itertools
-
+import numpy as np
 import pydiffvg
 import torch
 import torchvision
 import yaml
 from PIL import Image
-from svg_simplification import svg_file_simplification
 from tqdm import tqdm
 
+sys.path.append(os.getcwd())
 import losses
-
-parser = argparse.ArgumentParser()
-parser.add_argument("--outdir", required=True, type=str)
-parser.add_argument("--input", required=True, type=str)
-parser.add_argument("--fmin", default=0, type=int)
-parser.add_argument("--fmax", default=200, type=int)
-args = parser.parse_args()
-
-exp_dir = args.outdir
-exp_name = "p4"
-
-config_str = """
-loss:
-  name: local-loss
-  args:
-    lam_render: 1
-    lam_reg: 1.e-6
-"""
-config = yaml.load(config_str, Loader=yaml.FullLoader)
-loss_fn = losses.make(config["loss"])
+from refine_args import parser
+from svg_simplification import svg_file_simplification
 
 
-def get_reference_image_path(path, font, char):
-    return os.path.join(path, font, f"{char:02d}_rec.png")
+def get_reference_image_path(
+    input_path: str, font: str, character: str, alpha: float
+) -> str:
+    return os.path.join(input_path, font, character, f"{alpha:.2f}.png")
 
 
-def get_init_svg_path(path, font, char):
-    return os.path.join(path, font, f"{char:02d}_init.svg")
+def get_init_svg_path(input_path: str, font: str, character: str, alpha: float) -> str:
+    return os.path.join(input_path, font, character, f"{alpha:.2f}.svg")
 
 
-def get_dst_svg_path(path, font, char):
-    return os.path.join(get_dst_font_dir(path, font), f"{char:02d}_{exp_name}.svg")
+def get_dst_svg_path(output_path: str, font: str, character: str, alpha: float) -> str:
+    return os.path.join(
+        get_dst_font_dir(output_path, font, character), f"{alpha:.2f}_refined.svg"
+    )
 
 
-def get_dst_font_dir(path, font):
-    return os.path.join(exp_dir, font)
+def get_dst_font_dir(output_path: str, font: str, character: str) -> str:
+    return os.path.join(output_path, font, character)
 
 
-def post_refinement(path, font, glyph):
-    dst_dir = get_dst_font_dir(path, font)
+def post_refinement(
+    input_path: str, output_path: str, font: str, character: str, alpha: float
+) -> Optional[float]:
+    config_str = """
+    loss:
+        name: local-loss
+        args:
+            lam_render: 1
+            lam_reg: 1.e-6
+    """
+    config = yaml.load(config_str, Loader=yaml.FullLoader)
+    loss_fn = losses.make(config["loss"])
+
+    dst_dir = get_dst_font_dir(output_path, font, character)
     os.makedirs(dst_dir, exist_ok=True)
-    init_svg_path = get_init_svg_path(path, font, glyph)
-    dst_svg_path = get_dst_svg_path(path, font, glyph)
-    image_path = get_reference_image_path(path, font, glyph)
+
+    image_path = get_reference_image_path(input_path, font, character, alpha)
+    init_svg_path = get_init_svg_path(input_path, font, character, alpha)
+    dst_svg_path = get_dst_svg_path(output_path, font, character, alpha)
 
     target = torchvision.transforms.ToTensor()(Image.open(image_path).convert("L")).to(
         "cpu"
@@ -107,9 +106,9 @@ def post_refinement(path, font, glyph):
 
         # The output image is in linear RGB space. Do Gamma correction before saving the image.
         points_vars = []
-        for path in shapes:
-            path.points.requires_grad = True
-            points_vars.append(path.points)
+        for svg_path in shapes:
+            svg_path.points.requires_grad = True
+            points_vars.append(svg_path.points)
 
         # Optimize
         points_optim = torch.optim.Adam(points_vars, lr=0.5, betas=(0.9, 0.999))
@@ -173,22 +172,43 @@ def post_refinement(path, font, glyph):
     return float(loss_dict["render"])
 
 
-def main():
+def main(args: argparse.Namespace) -> None:
     pydiffvg.set_use_gpu(False)
-    origin_path = args.input
-    font_list = [f"{i:04d}" for i in range(args.fmin, args.fmax)]
-    glyph_list = list(range(26))
 
-    font_list = font_list if font_list else os.listdir(origin_path)
+    origin_dir = args.indir
+    exp_dir = args.outdir
     os.makedirs(exp_dir, exist_ok=True)
 
+    # characters for evaluation
+    character_index_min = args.cmin
+    character_index_max = args.cmax
+    characters = [chr(i) for i in range(65, 91)][
+        character_index_min : character_index_max + 1
+    ]
+
+    # alphas for evaluation
+    alpha_min = args.amin
+    alpha_max = args.amax
+    alpha_num = args.anum
+    alphas = np.linspace(alpha_min, alpha_max, alpha_num).tolist()
+
+    # font names for evaluation
+    font_names = os.listdir(origin_dir)
+
     task = sorted(
-        [(origin_path, f, g) for f, g in itertools.product(font_list, glyph_list)]
+        [
+            (origin_dir, font_name, character, alpha)
+            for font_name, character, alpha in itertools.product(
+                font_names,
+                characters,
+                alphas,
+            )
+        ]
     )
 
     losses = []
-    for path, font, glyph in tqdm(task):
-        loss_render = post_refinement(path, font, glyph)
+    for path, font_name, character, alpha in tqdm(task):
+        loss_render = post_refinement(path, exp_dir, font_name, character, alpha)
         if loss_render is not None:
             losses.append(loss_render)
 
@@ -196,4 +216,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    args = parser.parse_args()
+    main(args)

@@ -1,11 +1,15 @@
-from typing import Type, Any, Callable, Union, List, Optional
+from typing import Callable, Optional
 
 import torch
 import torch.nn as nn
 from torch import Tensor
+
 import models
 
-def conv3x3(in_planes: int, out_planes: int, stride: int = 1, groups: int = 1, dilation: int = 1) -> nn.Conv2d:
+
+def conv3x3(
+    in_planes: int, out_planes: int, stride: int = 1, groups: int = 1, dilation: int = 1
+) -> nn.Conv2d:
     """3x3 convolution with padding"""
     return nn.Conv2d(
         in_planes,
@@ -18,16 +22,19 @@ def conv3x3(in_planes: int, out_planes: int, stride: int = 1, groups: int = 1, d
         dilation=dilation,
     )
 
+
 def conv1x1(in_planes: int, out_planes: int, stride: int = 1) -> nn.Conv2d:
     """1x1 convolution"""
     return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False)
 
+
 class BasicBlock(nn.Module):
     def __init__(
         self,
-        inplanes: int, planes: int,
+        inplanes: int,
+        planes: int,
         stride: int = 1,
-        act: str = 'relu',
+        act: str = "relu",
         downsample: Optional[nn.Module] = None,
         norm_layer: Optional[Callable[..., nn.Module]] = None,
     ) -> None:
@@ -38,18 +45,18 @@ class BasicBlock(nn.Module):
         self.conv1 = conv3x3(inplanes, planes, stride)
         self.bn1 = norm_layer(planes)
 
-        if act == 'relu':
+        if act == "relu":
             self.relu = nn.ReLU(inplace=True)
-        elif act == 'leaky_relu':
+        elif act == "leaky_relu":
             self.relu = nn.LeakyReLU(negative_slope=0.01, inplace=True)
         else:
-            raise NotImplementedError('not implemented activation')
+            raise NotImplementedError("not implemented activation")
 
         self.conv2 = conv3x3(planes, planes)
         self.bn2 = norm_layer(planes)
         self.downsample = downsample
         self.stride = stride
-    
+
     def forward(self, x: Tensor) -> Tensor:
         identity = x
 
@@ -68,15 +75,16 @@ class BasicBlock(nn.Module):
 
         return out
 
-@models.register('img64-to-z')
+
+@models.register("img64-to-z")
 class ImageEncoder64(nn.Module):
-    def __init__(self, img_ef_dim, z_dim, key='img'):
+    def __init__(self, img_ef_dim, z_dim, key=None):
         super().__init__()
         self.key = key
         self.img_ef_dim = img_ef_dim
         self.z_dim = z_dim
         self._norm_layer = nn.BatchNorm2d
-        self.act = 'leaky_relu'
+        self.act = "leaky_relu"
 
         # 64 x 64
         self.conv1 = nn.Conv2d(1, self.img_ef_dim, 7, stride=2, padding=3, bias=False)
@@ -90,12 +98,16 @@ class ImageEncoder64(nn.Module):
         self.layer3 = self._make_layer(self.img_ef_dim * 4, 2, stride=2)
         self.layer4 = self._make_layer(self.img_ef_dim * 8, 3, stride=2)
 
-        self.conv2 = nn.Conv2d(self.img_ef_dim * 8, self.img_ef_dim * 16, 4, stride=1, padding=0, bias=True)
+        self.conv2 = nn.Conv2d(
+            self.img_ef_dim * 8, self.img_ef_dim * 16, 4, stride=1, padding=0, bias=True
+        )
         self.fc = nn.Linear(self.img_ef_dim * 16, self.z_dim)
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='leaky_relu')
+                nn.init.kaiming_normal_(
+                    m.weight, mode="fan_out", nonlinearity="leaky_relu"
+                )
             elif isinstance(m, nn.BatchNorm2d):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
@@ -111,10 +123,14 @@ class ImageEncoder64(nn.Module):
             )
 
         layers = []
-        layers.append(block(self.inplanes, planes, stride, self.act, downsample, norm_layer))
+        layers.append(
+            block(self.inplanes, planes, stride, self.act, downsample, norm_layer)
+        )
         self.inplanes = planes
         for _ in range(1, blocks):
-            layers.append(block(self.inplanes, planes, act=self.act, norm_layer=norm_layer))
+            layers.append(
+                block(self.inplanes, planes, act=self.act, norm_layer=norm_layer)
+            )
 
         return nn.Sequential(*layers)
 
@@ -134,13 +150,13 @@ class ImageEncoder64(nn.Module):
         x = self.conv2(x)
         x = torch.flatten(x, start_dim=1)
 
-        x = self.relu(x) # maybe remove
+        x = self.relu(x)  # maybe remove
         x = self.fc(x)
-        
-        return x
-    
 
-@models.register('embed')
+        return x
+
+
+@models.register("embed")
 class Embed(nn.Module):
     def __init__(self, n_embed, z_dim):
         super().__init__()
@@ -148,31 +164,37 @@ class Embed(nn.Module):
         self.init_embed_weight()
 
     def init_embed_weight(self):
-        weights = torch.ones_like(self.embed.weight, requires_grad=True).to(self.embed.weight.device)*0.5
+        weights = (
+            torch.ones_like(self.embed.weight, requires_grad=True).to(
+                self.embed.weight.device
+            )
+            * 0.5
+        )
         self.embed.weight = torch.nn.Parameter(weights)
-    
+
     def forward(self, x):
         return self.embed(x)
 
-@models.register('index-to-z')
+
+@models.register("index-to-z")
 class IndexEmbed(nn.Module):
     def __init__(self, n_embed, z_dim):
         super().__init__()
         self.embed = nn.Embedding(n_embed, z_dim)
-    
-    def forward(self, batch):
-        return self.embed(batch['index'])
 
-@models.register('family-char-to-z')
+    def forward(self, batch):
+        return self.embed(batch["index"])
+
+
+@models.register("family-char-to-z")
 class FamilyCharEmbed(nn.Module):
     def __init__(self, n_family, dim_family, n_char, dim_char):
         super().__init__()
         self.family_embed = nn.Embedding(n_family, dim_family)
         self.char_embed = nn.Embedding(n_char, dim_char)
-    
+
     def forward(self, batch):
-        embed_fam = self.family_embed(batch['font_idx'])
-        embed_chr = self.char_embed(batch['char_idx'])
+        embed_fam = self.family_embed(batch["font_idx"])
+        embed_chr = self.char_embed(batch["char_idx"])
         out = torch.cat([embed_fam, embed_chr], dim=-1)
         return out
-

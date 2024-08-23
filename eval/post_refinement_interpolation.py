@@ -2,6 +2,8 @@ import argparse
 import os
 import sys
 
+import numpy as np
+
 sys.path.append(os.getcwd())
 import itertools
 
@@ -176,8 +178,8 @@ def post_refinement(path, font, glyph):
 def main():
     pydiffvg.set_use_gpu(False)
     origin_path = args.input
-    font_list = [f"{i:04d}" for i in range(args.fmin, args.fmax)]
-    glyph_list = list(range(26))
+    font_list = [f"{i:.2f}" for i in np.linspace(0.0, 1.0, 5)]
+    glyph_list = list(range(4))
 
     font_list = font_list if font_list else os.listdir(origin_path)
     os.makedirs(exp_dir, exist_ok=True)
